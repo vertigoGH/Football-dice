@@ -998,22 +998,28 @@ function waitTOdecision(timeoutCell) {
         content.style.top  = '50%';
         content.style.transform = 'translate(-50%, -50%)';
 
+		// Deshabilitar dados mientras se espera la decisión
+        disableDiceButtons();
+
         // Guardar resolve para poder llamarlo desde el evento socket del rival
         pendingTOResolve = resolve;
 
-        document.getElementById('btn-timeout').onclick = () => {
+        const closeTOModal = (decision) => {
             modal.style.display = 'none';
             pendingTOResolve = null;
-            // Informar al rival de la decisión
-            if (socket) socket.emit('toDecision', { decision: 'timeout' });
-            resolve('timeout');
+            // Rehabilitar dados solo si sigue siendo nuestro turno
+            rollButtons.forEach(btn => {
+                btn.disabled = false;
+                btn.style.opacity = '';
+                btn.style.cursor  = '';
+            });
+            updateKickButtons(); // aplica las restricciones normales de turno y estado
+            if (socket) socket.emit('toDecision', { decision });
+            resolve(decision);
         };
-        document.getElementById('btn-turnover').onclick = () => {
-            modal.style.display = 'none';
-            pendingTOResolve = null;
-            if (socket) socket.emit('toDecision', { decision: 'turnover' });
-            resolve('turnover');
-        };
+ 
+        document.getElementById('btn-timeout').onclick  = () => closeTOModal('timeout');
+        document.getElementById('btn-turnover').onclick = () => closeTOModal('turnover');
     });
 }
 
