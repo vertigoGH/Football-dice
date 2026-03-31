@@ -1,0 +1,1710 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Football Dice — Online</title>
+
+<link rel="stylesheet" href="styles60.css">
+
+<!-- Socket.io client (cargado desde el servidor Node.js) -->
+<script src="/socket.io/socket.io.js"></script>
+
+<style>
+  /* ── Indicador de turno ── */
+  #turn-banner {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 9999;
+    text-align: center;
+    padding: 6px 12px;
+    font-size: 14px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    transition: background 0.3s;
+  }
+  #turn-banner.your-turn   { background: #1a6b2f; color: #fff; }
+  #turn-banner.their-turn  { background: #7a1a1a; color: #fff; }
+  #turn-banner.waiting     { background: #333;    color: #aaa; }
+
+  /* ── Overlay de bloqueo cuando no es tu turno ── */
+  #block-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    background: rgba(0,0,0,0);
+    cursor: not-allowed;
+  }
+
+  /* ── Sala y conexión ── */
+  #connection-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    gap: 14px;
+    font-family: sans-serif;
+  }
+  #connection-panel h2 { margin: 0; font-size: 24px; color: #e8b800; }
+  #connection-panel input {
+    padding: 8px 14px;
+    font-size: 15px;
+    border-radius: 6px;
+    border: 1px solid #555;
+    background: #222;
+    color: #fff;
+    width: 220px;
+    text-align: center;
+  }
+  #connection-panel button {
+    padding: 10px 28px;
+    font-size: 15px;
+    border-radius: 6px;
+    border: none;
+    background: #e8b800;
+    color: #111;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #connection-panel button:hover { background: #ffd600; }
+  #conn-status { font-size: 13px; color: #aaa; }
+  #player-badge {
+    font-size: 18px;
+    padding: 6px 20px;
+    border-radius: 20px;
+  }
+  #player-badge.p1 { background: #c0122a; color: #fff; }
+  #player-badge.p2 { background: #1a6baa; color: #fff; }
+
+  /* ── Animación de dados ── */
+  @keyframes diceRollAnim {
+    0%   { transform: scale(1.4) rotate(-15deg); }
+    50%  { transform: scale(0.8) rotate(10deg); }
+    100% { transform: scale(1)   rotate(0deg); }
+  }
+  .dice-rolling { animation: diceRollAnim 0.35s ease-out; }
+</style>
+</head>
+
+
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     PANEL DE CONEXIÓN (se oculta al entrar en la sala)
+     ══════════════════════════════════════════════════════════ -->
+<div id="connection-panel">
+  <h2>🏈 FOOTBALL DICE Online</h2>
+  <div id="conn-status">Connecting to the server…</div>
+
+  <div id="join-area" style="display:none; flex-direction:column; align-items:center; gap:10px;">
+    <label for="room-input" style="font-size:13px; color:#aaa;">Room code (share with opponent)</label>
+    <input id="room-input" type="text" value="room1" maxlength="20" />
+    <button id="btn-join-room">JOIN THE ROOM</button>
+  </div>
+
+  <div id="waiting-msg" style="display:none; color:#e8b800; font-size:15px;">
+    ⏳ Waiting for an opponent…
+  </div>
+  <div id="player-badge" style="display:none;"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     BANNER DE TURNO
+     ══════════════════════════════════════════════════════════ -->
+<div id="turn-banner" class="waiting" style="display:none;">Connecting…</div>
+
+<!-- Overlay que bloquea la UI cuando no es tu turno -->
+<div id="block-overlay"></div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     CONTENIDO ORIGINAL DEL JUEGO
+     ══════════════════════════════════════════════════════════ -->
+
+<div class="infoBlockContainer">
+
+  <!-- Bloque Info 1 -->
+  <div class="infoBlock" player="1">
+
+    <div class="cell top">TEAM 1</div>
+    <div class="cell top">POSS</div>
+    <div class="cell top">DOWN</div>
+    <div class="cell top">TO GO</div>
+    <div class="cell top">YD LINE</div>
+    <div class="cell top">TIME<br>OUT</div>
+    <button class="playerButton" title="Click for special defensive play">
+      DEF<br>PLAY
+    </button>
+
+    <div class="cell bottom" data-name="score">00</div>
+    <div class="cell bottom" data-name="possN">-</div>
+    <div class="cell bottom" data-name="downN">-</div>
+    <div class="cell bottom" data-name="to_go">-</div>
+    <div class="cell bottom player1Text" data-name="ydLine">-</div>
+    <div class="cell bottom" data-name="timeouts">3</div>
+    <div class="cell bottom" data-name="defPlays">3</div>
+  </div>
+
+  <!-- BLOQUE DADOS -->
+  <div class="diceContainer">
+     <div class="diceButtonsBlock">
+        <div class="diceButtonsRow">
+            <button class="diceRollButton btn-50" dice="1" title="Field Goal / PAT">
+                FG
+            </button>
+            <button class="diceRollButton btn-50" dice="0" title="2 Points attempt">
+                2 PT
+            </button>    
+            <button class="diceRollButton btn-50" dice="Punt" title="Punt">
+                PUNT
+            </button>
+        </div>
+            <button class="diceRollButton btn-150" dice="3" title="Click to roll 3 dice">
+                3 DICE PLAY
+            </button>
+            <button class="diceRollButton btn-100" dice="2" title="Click to roll 2 dice">
+                2 DICE PLAY
+            </button>  
+
+            <div class="diceRowValues">
+                <div class="diceCell diceD1">D1</div>
+                <div class="diceCell diceD2">D2</div>
+                <div class="diceCell diceD3">D3</div>
+            </div>
+        </div>
+  </div>  
+
+  <!-- Bloque Info 2 -->
+  <div class="infoBlock" player="2">
+    
+    <button class="playerButton" title="Click for special defensive play">
+      DEF<br>PLAY
+    </button>
+    <div class="cell top">TIME<br>OUT</div>
+    <div class="cell top">YD LINE</div>
+    <div class="cell top">TO GO</div>
+    <div class="cell top">DOWN</div>
+    <div class="cell top">POSS</div>
+    <div class="cell top">TEAM 2</div>
+    
+    <div class="cell bottom" data-name="defPlays">3</div>
+    <div class="cell bottom" data-name="timeouts">3</div>
+    <div class="cell bottom player2Text" data-name="ydLine">-</div>
+    <div class="cell bottom" data-name="to_go">-</div>
+    <div class="cell bottom" data-name="downN">-</div>
+    <div class="cell bottom" data-name="possN">-</div>
+    <div class="cell bottom" data-name="score">00</div>
+  </div>
+
+</div>
+
+<!-- IMAGEN DEL CAMPO -->
+ <div class="fieldContainer">
+     <div class="football-engine-container">
+        <div id="field" class="field">
+          <div class="endzone left"><span>TOUCHDOWN</span></div>
+          <div id="grid-lines" class="grid-lines">
+          </div> 
+          <div class="endzone right"><span>TOUCHDOWN</span></div>
+        </div>
+     </div>
+</div>
+
+
+<!-- SCORE TABLES -->
+  <div class="tablesContainer">
+
+<!-- MATRIZ 7x13 (scoreTable)-->
+ <table class="scoreTable">
+	        <!-- Fila 1 -->
+    <tr>
+        <td class="scoreCell fg-black font-15">DICE</td>
+        <td class="scoreCell fg-green">1</td>
+        <td class="scoreCell fg-green">2</td>
+        <td class="scoreCell fg-green">3</td>
+        <td class="scoreCell fg-green">4</td>
+        <td class="scoreCell fg-green">5</td>
+        <td class="scoreCell fg-green">6</td>
+        <td class="scoreCell fg-green">7</td>
+        <td class="scoreCell fg-green">8</td>
+        <td class="scoreCell fg-green">9</td>
+        <td class="scoreCell fg-green">10</td>
+        <td class="scoreCell fg-green">11</td>
+        <td class="scoreCell fg-green">12</td>
+	</tr>
+            <!-- Fila 2 -->
+	<tr>
+        <td class="scoreCell fg-gray">1</td>
+        <td class="scoreCell fg-violet">TO</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black" title="Defensive Holding&#10+5 yds, 1st down">DH</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black">6</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black">8</td>
+        <td class="scoreCell fg-black">4</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black">1</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+	</tr> 
+            <!-- Fila 3 -->
+	<tr>
+        <td class="scoreCell fg-gray">2</td>
+        <td class="scoreCell fg-blue">TD</td>
+        <td class="scoreCell fg-black">1</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-black">9</td>
+        <td class="scoreCell fg-red" title="False Start">-5</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-black">4</td>
+        <td class="scoreCell fg-black">6</td>
+        <td class="scoreCell fg-black">26</td>
+        <td class="scoreCell fg-red" title="Delay of Game">-5</td>
+        <td class="scoreCell fg-black">18</td>
+        <td class="scoreCell fg-blue">TD</td>
+	</tr>
+            <!-- Fila 4 -->
+	<tr>
+        <td class="scoreCell fg-gray">3</td>
+        <td class="scoreCell fg-black">1</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black">5</td>
+        <td class="scoreCell fg-black">1</td>
+        <td class="scoreCell fg-black">6</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-violet">TO</td>
+        <td class="scoreCell fg-red" title="Offensive Holding">-10</td>
+        <td class="scoreCell fg-black">5</td>
+        <td class="scoreCell fg-black">12</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black">12</td>
+	</tr>
+            <!-- Fila 5 -->
+	<tr>
+        <td class="scoreCell fg-gray">4</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black">4</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-red" title="Sack">-8</td>
+        <td class="scoreCell fg-black">7</td>
+        <td class="scoreCell fg-black">5</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black">15</td>
+        <td class="scoreCell fg-black">7</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-violet">TO</td>
+	</tr>
+            <!-- Fila 6 -->
+	<tr>
+        <td class="scoreCell fg-gray">5</td>   
+        <td class="scoreCell fg-blue">TD</td>
+        <td class="scoreCell fg-red" title="Offensive Holding">-10</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-violet">TO</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-black">4</td>
+        <td class="scoreCell fg-black">13</td>
+        <td class="scoreCell fg-black">10</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-red" title="Offensive Face Mask">-15</td>
+        <td class="scoreCell fg-black">37</td>
+	</tr>
+            <!-- Fila 7 -->
+	<tr>
+        <td class="scoreCell fg-gray">6</td>   
+        <td class="scoreCell fg-black" title="Incomplete Pass">0</td>
+        <td class="scoreCell fg-black">3</td>
+        <td class="scoreCell fg-black">4</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-black">8</td>
+        <td class="scoreCell fg-black">2</td>
+        <td class="scoreCell fg-red" title="Sack">-3</td>
+        <td class="scoreCell fg-black">19</td>
+        <td class="scoreCell fg-black">11</td>
+        <td class="scoreCell fg-blue">TD</td>
+        <td class="scoreCell fg-black">12</td>
+        <td class="scoreCell fg-black" title="Defensive Face Mask&#10+15 yds, 1st down">FM</td>
+	</tr>
+            <!-- Fila 8 -->
+	<tr>
+        <td class="scoreCell fg-black font-15">PUNT</td>
+        <td class="scoreCell fg-steelblue">-</td>
+        <td class="scoreCell fg-steelblue">20</td>
+        <td class="scoreCell fg-steelblue">25</td>
+        <td class="scoreCell fg-steelblue">30</td>
+        <td class="scoreCell fg-steelblue">35</td>
+        <td class="scoreCell fg-steelblue">40</td>
+        <td class="scoreCell fg-steelblue">45</td>
+        <td class="scoreCell fg-steelblue">50</td>
+        <td class="scoreCell fg-steelblue">55</td>
+        <td class="scoreCell fg-steelblue">60</td>
+        <td class="scoreCell fg-steelblue">65</td>
+        <td class="scoreCell fg-steelblue">70</td>
+	</tr>
+</table>
+        <!-- TABLA SECUNDARIA 7x3 -->
+          <table class="smallTable">
+            <colgroup>
+              <col style="width:45px">
+              <col style="width:45px">
+              <col style="width:45px">
+            </colgroup>
+            <tr class="h22-5">
+              <td colspan="2" class="fg">PAT / FG (yds)</td>
+              <td rowspan="2" class="twoPC">2 PT</td>
+            </tr> 
+            <tr class="h22-5">
+              <td>0-34</td>
+              <td>35-50</td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell Good"></td>
+              <td class="imageCell Good"></td>
+              <td class="imageCell NoGood"></td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell Good"></td>
+              <td class="imageCell Good"></td>
+              <td class="imageCell NoGood"></td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell NoGood"></td>
+              <td class="imageCell NoGood"></td>
+              <td class="imageCell Good"></td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell Good"></td>
+              <td class="imageCell NoGood"></td>
+              <td class="imageCell Good"></td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell Good"></td>
+              <td class="imageCell Good"></td>
+              <td class="imageCell NoGood"></td>
+            </tr>
+            <tr class="h45">
+              <td class="imageCell Good"></td>
+              <td class="imageCell Good"></td>
+              <td class="imageCell NoGood"></td>
+            </tr>
+          </table>
+
+        <!-- Play by Play -->
+         <div class="playByPlayTextbox">
+            <div style="text-align: center; font-weight: bold; text-decoration: underline; font-size: 16px; margin-bottom: 10px;">
+            PLAY BY PLAY
+            </div>
+        </div>
+  </div>
+
+  <!-- Ventana emergente para TO -->
+    <div id="modal-container" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">TO SITUATION:</div>
+            <div class="modal-body">Do you want to call a timeout?</div>
+            <div class="modal-body">If you don't, the play will result in a turnover at current yard.</div>
+            <div id="modal-timeouts" class="modal-footer">Timeouts remaining: </div>
+            
+            <div class="modal-buttons">
+                <button id="btn-timeout" class="btn btn-to">TIMEOUT</button>
+                <button id="btn-turnover" class="btn btn-turn">TURNOVER</button>
+            </div>
+        </div>
+    </div>
+
+   <!-- Ventana emergente para Game Over -->
+    <div id="modal-gameover" class="modal-overlay" style="display: none;">
+        <div class="modal-content-gameover">
+            <div class="modal-header-gameover">GAME OVER</div>
+            
+            <div class="players-container">
+                <div class="player-box">
+                    <span class="label-p1">PLAYER 1</span>
+                    <div class="color-square crimson">
+                        <span id="score-p1" class="score-text">24</span>
+                    </div>
+                </div>
+                <div class="player-box">
+                    <span class="label-p2">PLAYER 2</span>
+                    <div class="color-square steelblue">
+                        <span id="score-p2" class="score-text">17</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-container pro">
+                <div id="p1-td" class="stat p1">0</div><div class="label">Touchdowns</div><div id="p2-td" class="stat p2">0</div>
+                <div id="p1-fg" class="stat p1">0/0</div><div class="label">Field Goals</div><div id="p2-fg" class="stat p2">0/0</div>
+                <div id="p1-xp" class="stat p1">0/0</div><div class="label">Extra points</div><div id="p2-xp" class="stat p2">0/0</div>
+                <div id="p1-pt2" class="stat p1">0/0</div><div class="label">2PT conversions</div><div id="p2-pt2" class="stat p2">0/0</div>
+                <div id="p1-punts" class="stat p1">0</div><div class="label">Punts</div><div id="p2-punts" class="stat p2">0</div>
+                <div id="p1-turnovers" class="stat p1">0</div><div class="label">Turnovers</div><div id="p2-turnovers" class="stat p2">0</div>
+                <div id="p1-safety" class="stat p1">0</div><div class="label">Safeties</div><div id="p2-safety" class="stat p2">0</div>
+            </div>
+
+            <div class="modal-footer-gameover">
+                <button id="btn-exit" class="btn-exitGame">EXIT</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ventana emergente para Inicio de Partido -->
+    <!-- Solo el Jugador 1 puede iniciar; el Jugador 2 ve un mensaje de espera -->
+    <div id="modal-start" class="modal-overlay">
+        <div class="modal-content modal-content--col">
+            <div class="modal-header">FOOTBALL DICE</div>
+            <!-- Botones para Jugador 1 -->
+            <div id="start-buttons-p1" class="modal-buttons modal-buttons--col" style="display:none;">
+                <div style="font-size:13px; color:#aaa; margin-bottom:6px;">You are <strong style="color:#e60f3a;">PLAYER 1</strong> — Choose game length:</div>
+                <button id="btn-5turns"  class="btn btn-turn btn-fixed">5 TURNS GAME</button>
+                <button id="btn-10turns" class="btn btn-turn btn-fixed">10 TURNS GAME</button>
+            </div>
+            <!-- Mensaje para Jugador 2 -->
+            <div id="start-wait-p2" style="display:none; color:#aaa; font-size:14px; padding: 10px 0;">
+                You are <strong style="color:#1a6baa;">PLAYER 2</strong><br><br>
+                Waiting for Player 1 to start the game…
+            </div>
+        </div>
+    </div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     SCRIPT PRINCIPAL
+     ══════════════════════════════════════════════════════════ -->
+<script>
+
+// ═══════════════════════════════════════════════════════════════
+// VARIABLES DE ESTADO MULTIJUGADOR
+// ═══════════════════════════════════════════════════════════════
+let socket;
+let myPlayerNumber = null;   // 1 o 2 según lo que asigne el servidor
+let isMyTurn = false;        // true cuando es el turno de este cliente
+let pendingTOResolve = null; // Para la promesa del modal TO
+
+// ─── ESTRUCTURAS DE DATOS ORIGINALES ──────────────────────────
+
+const GameState = {
+    currentPlayer: 1,
+    opponent: 2,
+    initialToGo: "",
+    downPreRoll: "",
+    ydLine: "",
+    playType: "",
+    isPunt: false,
+    TOButton: false,
+    maxPossessions: 3,
+    isGameOver: false,
+    lastPossession: { 1: false, 2: false }
+};
+
+const infoPlay = {
+    infoPosition: "",
+    infoDownYard: "",
+    infoResult: ""
+};
+
+const Stats = {
+    players: {
+        1: { td:0, fg:{made:0,att:0}, xp:{made:0,att:0}, pt2:{made:0,att:0}, punts:0, turnovers:0, safety:0 },
+        2: { td:0, fg:{made:0,att:0}, xp:{made:0,att:0}, pt2:{made:0,att:0}, punts:0, turnovers:0, safety:0 }
+    }
+};
+
+const statsConfig = [
+    { key:"td",       format: v => v },
+    { key:"fg",       format: v => `${v.made}/${v.att}` },
+    { key:"xp",       format: v => `${v.made}/${v.att}` },
+    { key:"pt2",      format: v => `${v.made}/${v.att}` },
+    { key:"punts",    format: v => v },
+    { key:"turnovers",format: v => v },
+    { key:"safety",   format: v => v }
+];
+
+
+// ═══════════════════════════════════════════════════════════════
+// UTILIDADES ORIGINALES
+// ═══════════════════════════════════════════════════════════════
+const toNum = v => Number(v) || 0;
+const getCell = (name, p = GameState.currentPlayer) =>
+    document.querySelector(`.infoBlock[player="${p}"] [data-name="${name}"]`);
+
+
+// ═══════════════════════════════════════════════════════════════
+// UI DEL CAMPO (original)
+// ═══════════════════════════════════════════════════════════════
+const endzoneRight = document.querySelector('.endzone.right span');
+const endzoneLeft  = document.querySelector('.endzone.left span');
+const container    = document.querySelector('.football-engine-container');
+const gridLines    = container.querySelector('#grid-lines');
+
+let vLine, ball, ballContainer, ballLabel;
+
+function createBallAndLine() {
+    vLine = document.createElement('div');
+    vLine.className = 'verticalLine';
+    gridLines.appendChild(vLine);
+
+    ballContainer = document.createElement('div');
+    ballContainer.className = 'ballContainer';
+
+    ball = document.createElement('img');
+    ball.src = 'Ball.png';
+    ball.className = 'ballPic';
+
+    ballLabel = document.createElement('div');
+    ballLabel.className = 'ballLabel';
+    ballLabel.textContent = 'P1';
+
+    ballContainer.appendChild(ball);
+    ballContainer.appendChild(ballLabel);
+    gridLines.appendChild(ballContainer);
+}
+
+function initField() {
+    for (let i = 10; i <= 90; i += 10) {
+        const label    = i > 50 ? 100 - i : i;
+        const arrowDir = i < 50 ? 'left' : (i > 50 ? 'right' : null);
+        createYardGroup(i, label, 'top', arrowDir);
+        createYardGroup(i, label, 'bottom', arrowDir);
+    }
+    for (let i = 1; i < 100; i++) drawHashMarks(i);
+}
+
+function createYardGroup(percent, text, side, arrowDir) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'yard-wrapper';
+    wrapper.style.left = `${percent}%`;
+    if (side === 'top') {
+        wrapper.style.top = '10%';
+        wrapper.style.transform = 'translateX(-50%) rotate(180deg)';
+    } else {
+        wrapper.style.bottom = '10%';
+        wrapper.style.transform = 'translateX(-50%)';
+    }
+    const leftSide  = document.createElement('div');
+    leftSide.className  = 'yard-side-left';
+    const rightSide = document.createElement('div');
+    rightSide.className = 'yard-side-right';
+    const val   = text.toString();
+    const char1 = val.charAt(0);
+    const char2 = val.charAt(1) || '';
+    if (arrowDir === 'left') {
+        const arrow = document.createElement('div');
+        arrow.className = 'arrow to-left';
+        leftSide.appendChild(arrow);
+        leftSide.innerHTML += `<span class="yard-number-text">${char1}</span>`;
+        rightSide.innerHTML = `<span class="yard-number-text">${char2}</span>`;
+    } else if (arrowDir === 'right') {
+        leftSide.innerHTML  = `<span class="yard-number-text">${char1}</span>`;
+        rightSide.innerHTML = `<span class="yard-number-text">${char2}</span>`;
+        const arrow = document.createElement('div');
+        arrow.className = 'arrow to-right';
+        rightSide.appendChild(arrow);
+    } else {
+        leftSide.innerHTML  = `<span class="yard-number-text">${char1}</span>`;
+        rightSide.innerHTML = `<span class="yard-number-text">${char2}</span>`;
+    }
+    wrapper.appendChild(leftSide);
+    wrapper.appendChild(rightSide);
+    gridLines.appendChild(wrapper);
+}
+
+function drawHashMarks(percent) {
+    if (percent % 5 === 0) return;
+    const yPositions = ['2px','35%','62%','calc(100% - 10px)'];
+    yPositions.forEach(y => {
+        const mark = document.createElement('div');
+        mark.style.cssText = `position:absolute;left:${percent}%;top:${y};width:2px;height:10px;background:rgba(255,255,255,0.6)`;
+        gridLines.appendChild(mark);
+    });
+}
+
+const moveVerticalLine = (yard, fieldSide, possessor = GameState.currentPlayer) => {
+    if (!vLine || !ball) return;
+    const absoluteYard = fieldSide === 1 ? yard : 100 - yard;
+    const centerX = (absoluteYard / 100) * gridLines.offsetWidth;
+    vLine.style.left = `${centerX}px`;
+    const lineLeftEdge  = centerX - (vLine.offsetWidth / 2);
+    const lineRightEdge = centerX + (vLine.offsetWidth / 2);
+    if (possessor === 1) {
+        ballContainer.style.left = `${lineLeftEdge - ballContainer.offsetWidth}px`;
+        ball.style.transform = "scaleX(1)";
+        ballLabel.textContent = "P1";
+    } else {
+        ballContainer.style.left = `${lineRightEdge}px`;
+        ball.style.transform = "scaleX(-1)";
+        ballLabel.textContent = "P2";
+    }
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIONES DE ESTADO (originales)
+// ═══════════════════════════════════════════════════════════════
+const handleScore = (pts, player = GameState.currentPlayer) => {
+    const scoreCell = getCell("score", player);
+    scoreCell.textContent = (toNum(scoreCell.textContent) + pts).toString().padStart(2, '0');
+};
+
+function disableDiceButtons() {
+    document.querySelectorAll('.diceRollButton').forEach(btn => {
+        btn.disabled = true;
+        btn.style.opacity = "0.5";
+        btn.style.cursor = "not-allowed";
+    });
+}
+
+function resetCells() {
+    ['downN','to_go','ydLine'].forEach(name => {
+        document.querySelectorAll(`.cell[data-name="${name}"]`).forEach(cell => {
+            cell.textContent = "-";
+            cell.classList.remove("player1Text","player2Text");
+        });
+    });
+}
+
+function initCells() {
+    getCell("possN").textContent = "1";
+    getCell("downN").textContent = "1st";
+    getCell("to_go").textContent = "10";
+    const yardaCell = getCell("ydLine");
+    yardaCell.classList.add('player1Text');
+    yardaCell.textContent = "30";
+}
+
+function startGame() {
+    createBallAndLine();
+    initCells();
+    textContainer.innerHTML += `<div><span class="player1Text">Player 1 </span>receives the kickoff.</div>`;
+    moveVerticalLine(30, 1);
+    updateKickButtons();
+    GameState.isGameOver = false;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// TABLAS (originales)
+// ═══════════════════════════════════════════════════════════════
+const bigTable   = document.querySelector('.scoreTable');
+const smallTable = document.querySelector('.smallTable');
+let resaltadaBigTable   = null;
+let resaltadaSmallTable = null;
+// Registro del último resaltado aplicado (para sincronizar al rival vía syncState)
+const _lastHighlight = { bigRow: null, bigCol: null, smallRow: null, smallCol: null };
+const cellMap = [];
+
+function buildCellMap() {
+    for (let r = 0; r < bigTable.rows.length; r++) {
+        cellMap[r] = [];
+        for (let c = 0; c < bigTable.rows[r].cells.length; c++) {
+            cellMap[r][c] = bigTable.rows[r].cells[c];
+        }
+    }
+}
+buildCellMap();
+
+function highlightSmallTable(row, column) {
+    if (resaltadaSmallTable) resaltadaSmallTable.style.backgroundColor = "";
+    const fila = smallTable.rows[toNum(row) + 1];
+    if (fila) {
+        const celda = fila.cells[column];
+        if (celda) { celda.style.backgroundColor = "yellow"; resaltadaSmallTable = celda; }
+    }
+    _lastHighlight.smallRow = row;
+    _lastHighlight.smallCol = column;
+}
+
+function highlightBigTable(row, column) {
+    if (resaltadaBigTable)   resaltadaBigTable.style.backgroundColor   = "";
+    if (resaltadaSmallTable) resaltadaSmallTable.style.backgroundColor = "";
+    const celda = cellMap[row]?.[column];
+    if (!celda) return null;
+    celda.style.backgroundColor = "yellow";
+    resaltadaBigTable = celda;
+    _lastHighlight.bigRow = row;
+    _lastHighlight.bigCol = column;
+    _lastHighlight.smallRow = null;
+    _lastHighlight.smallCol = null;
+    return celda;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// PLAY BY PLAY (original + sincronización)
+// ═══════════════════════════════════════════════════════════════
+const textContainer = document.querySelector('.playByPlayTextbox');
+
+function playText(player, text) {
+    const info = (text === "PAT" || text === "2PT")
+        ? infoPlay.infoResult
+        : `${infoPlay.infoPosition} | ${infoPlay.infoDownYard} | ${infoPlay.infoResult}`;
+
+    const html = `<div><span class="player${player}Text">Player ${player}: </span> ${info}</div>`;
+    textContainer.innerHTML += html;
+    textContainer.scrollTop = textContainer.scrollHeight;
+
+    if (GameState.isGameOver) {
+        textContainer.innerHTML += `<div><strong>GAME OVER</strong></div>`;
+        textContainer.scrollTop = textContainer.scrollHeight;
+    }
+
+    // Enviar al rival para que también lo vea en su pantalla
+    if (socket) socket.emit('playByPlay', { html });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// LÓGICA DE DADOS (original)
+// ═══════════════════════════════════════════════════════════════
+const rollButtons = document.querySelectorAll('.diceRollButton');
+const diceD1 = document.querySelector('.diceD1');
+const diceD2 = document.querySelector('.diceD2');
+const diceD3 = document.querySelector('.diceD3');
+const fgButton    = document.querySelector('.diceRollButton[dice="1"]');
+const twoPtButton = document.querySelector('.diceRollButton[dice="0"]');
+
+function rollDie() { return Math.floor(Math.random() * 6) + 1; }
+
+function animateDice(cells) {
+    cells.forEach(c => { if (c.textContent !== "") { c.classList.remove('dice-rolling'); void c.offsetWidth; c.classList.add('dice-rolling'); } });
+}
+
+function rollDice(numDice) {
+    const d1 = rollDie(), d2 = rollDie(), d3 = rollDie();
+    diceD1.textContent = "";
+    diceD2.textContent = "";
+    diceD3.textContent = "";
+    let colValue = 0;
+    switch (numDice) {
+        case "0": case "1": diceD1.textContent = d1; break;
+        case "2":  diceD1.textContent = d1; diceD2.textContent = d2; colValue = d2; break;
+        case "3":  diceD1.textContent = d1; diceD2.textContent = d2; diceD3.textContent = d3; colValue = d2 + d3; break;
+        case "Punt": diceD2.textContent = d2; diceD3.textContent = d3; colValue = d2 + d3; break;
+    }
+    animateDice([diceD1, diceD2, diceD3]);
+    return { d1, d2, d3, colValue };
+}
+
+// Aplica una tirada ya calculada (usada por el cliente rival al recibir datos del servidor)
+function applyDiceResult(numDice, d1, d2, d3, colValue) {
+    diceD1.textContent = "";
+    diceD2.textContent = "";
+    diceD3.textContent = "";
+    switch (numDice) {
+        case "0": case "1": diceD1.textContent = d1; break;
+        case "2":  diceD1.textContent = d1; diceD2.textContent = d2; break;
+        case "3":  diceD1.textContent = d1; diceD2.textContent = d2; diceD3.textContent = d3; break;
+        case "Punt": diceD2.textContent = d2; diceD3.textContent = d3; break;
+    }
+    animateDice([diceD1, diceD2, diceD3]);
+}
+
+const updateKickButtons = () => {
+    const ydLineCell = getCell("ydLine");
+    const downCell   = getCell("downN");
+    if (!ydLineCell || !downCell) return;
+    const ydValue = toNum(ydLineCell.textContent);
+    const inOpponentField = ydLineCell.classList.contains(`player${GameState.opponent}Text`);
+    const isTouchdownState = downCell.textContent === "PAT" || ydLineCell.textContent === "TD";
+
+    rollButtons.forEach(btn => {
+        btn.disabled = isTouchdownState;
+        btn.style.opacity = isTouchdownState ? "0.5" : "";
+        btn.style.cursor  = isTouchdownState ? "not-allowed" : "";
+    });
+    if (inOpponentField || isTouchdownState) {
+        fgButton.disabled = false;
+        fgButton.style.opacity = "";
+        fgButton.style.cursor  = "";
+        fgButton.textContent   = isTouchdownState ? "PAT" : "FG";
+    } else {
+        fgButton.disabled = true;
+        fgButton.style.opacity = "0.5";
+        fgButton.style.cursor  = "not-allowed";
+        fgButton.textContent   = "FG";
+    }
+    if (isTouchdownState) {
+        twoPtButton.disabled = false;
+        twoPtButton.style.opacity = "";
+        twoPtButton.style.cursor  = "";
+    } else {
+        twoPtButton.disabled = true;
+        twoPtButton.style.opacity = "0.5";
+        twoPtButton.style.cursor  = "not-allowed";
+    }
+
+    // ── RESTRICCIÓN MULTIJUGADOR: bloquear botones si no es nuestro turno ──
+    applyTurnLock();
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// CONTROL DE TURNO (para multijugador)
+// ═══════════════════════════════════════════════════════════════
+function applyTurnLock() {
+    const overlay = document.getElementById('block-overlay');
+    const banner  = document.getElementById('turn-banner');
+
+    if (!myPlayerNumber) return; // Aún no asignado
+
+    isMyTurn = (myPlayerNumber === GameState.currentPlayer);
+
+    // Overlay de bloqueo
+    overlay.style.display = isMyTurn ? 'none' : 'block';
+
+    // Banner
+    if (isMyTurn) {
+        banner.className = 'your-turn';
+        banner.textContent = `🏈 YOUR TURN — You are Player ${myPlayerNumber}`;
+    } else {
+        banner.className = 'their-turn';
+        banner.textContent = `⏳ Waiting for Player ${GameState.currentPlayer}…`;
+    }
+}
+
+// Serializa el estado completo del juego para sincronización
+function buildStateSnapshot() {
+    // Recoger celdas de ambos jugadores
+    const cells = {};
+    [1, 2].forEach(p => {
+        const ydCell = document.querySelector(`.infoBlock[player="${p}"] [data-name="ydLine"]`);
+        cells[p] = {
+            score:   getCell("score", p)?.textContent,
+            possN:   getCell("possN", p)?.textContent,
+            downN:   getCell("downN", p)?.textContent,
+            to_go:   getCell("to_go", p)?.textContent,
+            ydLine:  ydCell?.textContent,
+            ydLineSide: ydCell?.classList.contains("player1Text") ? 1 : (ydCell?.classList.contains("player2Text") ? 2 : null),
+            timeouts: getCell("timeouts", p)?.textContent,
+            defPlays: getCell("defPlays", p)?.textContent
+        };
+    });
+    return {
+        currentPlayer:   GameState.currentPlayer,
+        opponent:        GameState.opponent,
+        isPunt:          GameState.isPunt,
+        isGameOver:      GameState.isGameOver,
+        lastPossession:  GameState.lastPossession,
+        maxPossessions:  GameState.maxPossessions,
+        cells,
+        stats:           Stats.players,
+        endzoneRightColor:      endzoneRight.style.color,
+        endzoneRightShadow:     endzoneRight.style.textShadow,
+        endzoneLeftColor:       endzoneLeft.style.color,
+        endzoneLeftShadow:      endzoneLeft.style.textShadow,
+        fgButtonText:    fgButton.textContent.trim(),
+        ydLineMoveYard:  null, // se pasa explícitamente
+        ydLineMoveField: null,
+        ydLineMovePlayer: null,
+        // Resaltado de tablas (para sincronizar al rival)
+        lastBigTableRow:   _lastHighlight.bigRow,
+        lastBigTableCol:   _lastHighlight.bigCol,
+        lastSmallTableRow: _lastHighlight.smallRow,
+        lastSmallTableCol: _lastHighlight.smallCol
+    };
+}
+
+// Aplica un snapshot de estado recibido del rival
+function applyStateSnapshot(snap) {
+    if (!snap) return;
+
+    // GameState global
+    GameState.currentPlayer  = snap.currentPlayer;
+    GameState.opponent       = snap.opponent;
+    GameState.isPunt         = snap.isPunt;
+    GameState.isGameOver     = snap.isGameOver;
+    GameState.lastPossession = snap.lastPossession;
+    GameState.maxPossessions = snap.maxPossessions;
+
+    // Celdas de ambos jugadores
+    [1, 2].forEach(p => {
+        const c = snap.cells?.[p];
+        if (!c) return;
+        const set = (name, val, cls) => {
+            const el = document.querySelector(`.infoBlock[player="${p}"] [data-name="${name}"]`);
+            if (!el) return;
+            el.textContent = val ?? el.textContent;
+            if (cls !== undefined) {
+                el.classList.remove("player1Text","player2Text");
+                if (cls) el.classList.add(cls);
+            }
+        };
+        set("score", c.score);
+        set("possN", c.possN);
+        set("downN", c.downN);
+        set("to_go", c.to_go);
+        set("timeouts", c.timeouts);
+        set("defPlays", c.defPlays);
+        if (c.ydLine !== undefined) {
+            set("ydLine", c.ydLine, c.ydLineSide ? `player${c.ydLineSide}Text` : null);
+        }
+    });
+
+    // Stats
+    if (snap.stats) {
+        [1, 2].forEach(p => { if (snap.stats[p]) Stats.players[p] = snap.stats[p]; });
+    }
+
+    // Endzones
+    if (snap.endzoneRightColor !== undefined) {
+        endzoneRight.style.color = snap.endzoneRightColor;
+        endzoneRight.style.textShadow = snap.endzoneRightShadow;
+        endzoneLeft.style.color  = snap.endzoneLeftColor;
+        endzoneLeft.style.textShadow  = snap.endzoneLeftShadow;
+    }
+
+    // Botón FG / PAT
+    if (snap.fgButtonText) fgButton.textContent = snap.fgButtonText;
+
+    // Mover línea/balón en el campo
+    if (snap.ydLineMoveYard !== null && snap.ydLineMoveField !== null) {
+        moveVerticalLine(snap.ydLineMoveYard, snap.ydLineMoveField, snap.ydLineMovePlayer || snap.currentPlayer);
+    }
+
+    // Resaltado de tablas
+    if (snap.lastBigTableRow !== null && snap.lastBigTableCol !== null) {
+        highlightBigTable(snap.lastBigTableRow, snap.lastBigTableCol);
+    }
+    if (snap.lastSmallTableRow !== null && snap.lastSmallTableCol !== null) {
+        highlightSmallTable(snap.lastSmallTableRow, snap.lastSmallTableCol);
+    }
+
+    updateKickButtons();
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MODAL TIME OUT (original + lógica para multijugador)
+// ═══════════════════════════════════════════════════════════════
+function waitTOdecision(timeoutCell) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modal-container');
+        const content = document.querySelector('.modal-content');
+        const timeoutsText = document.getElementById('modal-timeouts');
+        const currentVal = timeoutCell.textContent;
+        makeDraggable(content);
+
+        timeoutsText.textContent = `Timeouts remaining: ${currentVal}`;
+        modal.style.display = 'flex';
+        content.style.left = '50%';
+        content.style.top  = '50%';
+        content.style.transform = 'translate(-50%, -50%)';
+
+        // Guardar resolve para poder llamarlo desde el evento socket del rival
+        pendingTOResolve = resolve;
+
+        document.getElementById('btn-timeout').onclick = () => {
+            modal.style.display = 'none';
+            pendingTOResolve = null;
+            // Informar al rival de la decisión
+            if (socket) socket.emit('toDecision', { decision: 'timeout' });
+            resolve('timeout');
+        };
+        document.getElementById('btn-turnover').onclick = () => {
+            modal.style.display = 'none';
+            pendingTOResolve = null;
+            if (socket) socket.emit('toDecision', { decision: 'turnover' });
+            resolve('turnover');
+        };
+    });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MANEJO DE JUGADAS (original)
+// ═══════════════════════════════════════════════════════════════
+function handleTD() {
+    GameState.playType = "Touchdown";
+    infoPlay.infoResult = `<strong class="${GameState.currentPlayer === 1 ? 'player1Text' : 'player2Text'}">TOUCHDOWN!</strong>`;
+    if (GameState.currentPlayer === 1) {
+        endzoneRight.style.color = "#e60f3a";
+        endzoneRight.style.textShadow = "0 0 3px white, 0 0 3px white";
+    } else {
+        endzoneLeft.style.color = "#0e63aa";
+        endzoneLeft.style.textShadow = "0 0 3px white, 0 0 3px white";
+    }
+    getCell("ydLine").textContent = "TD";
+    getCell("downN").textContent  = "PAT";
+    moveVerticalLine(0, GameState.opponent);
+    handleScore(6);
+    updateKickButtons();
+}
+
+function handleSafety() {
+    GameState.playType = "Safety";
+    handleScore(2, GameState.opponent);
+    infoPlay.infoResult += `<br><strong>SAFETY!</strong>`;
+    getCell("downN").textContent = "-";
+    getCell("to_go").textContent = "-";
+    changePossession({ receiver: GameState.opponent, spot: 35, side: GameState.opponent, reason: "safety" });
+}
+
+const handlePunt = ({ gainOrLoss, currentYdLine, fieldSide, ydLineCell, toGoCell, downCell, suffixes }) => {
+    GameState.playType = "Punt";
+    let finalYd, crossedMidField = false, touchback = false;
+
+    if (fieldSide === GameState.currentPlayer) {
+        let totalProgress = Number(currentYdLine) + Number(gainOrLoss);
+        if (totalProgress >= 100) {
+            touchback = true; finalYd = 25; crossedMidField = true;
+        } else if (totalProgress > 50) {
+            finalYd = 100 - totalProgress; crossedMidField = true;
+        } else {
+            finalYd = totalProgress; crossedMidField = false;
+        }
+    } else {
+        let newYdLine = currentYdLine - gainOrLoss;
+        if (newYdLine <= 0) {
+            touchback = true; finalYd = 25; crossedMidField = false;
+        } else {
+            finalYd = newYdLine; crossedMidField = false;
+        }
+    }
+
+    let toPlayerCell = getCell("ydLine", GameState.opponent);
+    toPlayerCell.classList.remove("player1Text","player2Text");
+
+    if (crossedMidField) {
+        ydLineCell.classList.remove("player1Text","player2Text");
+        ydLineCell.classList.add(`player${GameState.opponent}Text`);
+        toPlayerCell.classList.add(`player${GameState.opponent}Text`);
+    } else {
+        ydLineCell.classList.remove("player1Text","player2Text");
+        if (fieldSide === GameState.currentPlayer) {
+            ydLineCell.classList.add(`player${GameState.currentPlayer}Text`);
+        } else {
+            ydLineCell.classList.add(`player${GameState.opponent}Text`);
+        }
+    }
+
+    ydLineCell.textContent = finalYd;
+    infoPlay.infoResult = `<strong>Punt!</strong> ${gainOrLoss} yards.`;
+    if (touchback) infoPlay.infoResult += " Touchback.";
+
+    let finalSide = ydLineCell.classList.contains("player1Text") ? 1 : 2;
+    toGoCell.textContent  = "10";
+    downCell.textContent  = suffixes[1];
+    changePossession({ receiver: GameState.opponent, spot: finalYd, side: finalSide, reason: "punt" });
+    return { newYdLine: finalYd, side: finalSide, endTurn: true };
+};
+
+const handleNormalPlay = ({ gainOrLoss, currentYdLine, fieldSide, ydLineCell, toGoCell, downCell, suffixes }) => {
+    GameState.playType = "NormalPlay";
+    let newYdLine, normalProgress;
+
+    if (fieldSide === GameState.currentPlayer) {
+        normalProgress = currentYdLine + gainOrLoss;
+        if (normalProgress < 0) {
+            Stats.players[GameState.currentPlayer].safety++;
+            handleSafety();
+            return { endTurn: true };
+        }
+    } else {
+        normalProgress = currentYdLine - gainOrLoss;
+        if (normalProgress <= 0) {
+            Stats.players[GameState.currentPlayer].td++;
+            handleTD();
+            return { endTurn: true };
+        }
+    }
+
+    if (normalProgress > 50) {
+        let oppositeSide = fieldSide === 1 ? 2 : 1;
+        let toPlayerCell = getCell("ydLine", oppositeSide);
+        ydLineCell.classList.remove("player1Text","player2Text");
+        ydLineCell.classList.add(`player${oppositeSide}Text`);
+        toPlayerCell.classList.remove("player1Text","player2Text");
+        toPlayerCell.classList.add(`player${oppositeSide}Text`);
+        newYdLine = 100 - normalProgress;
+    } else {
+        ydLineCell.classList.remove("player1Text","player2Text");
+        if (fieldSide === GameState.currentPlayer) {
+            ydLineCell.classList.add(`player${GameState.currentPlayer}Text`);
+        } else {
+            ydLineCell.classList.add(`player${GameState.opponent}Text`);
+        }
+        newYdLine = normalProgress;
+    }
+
+    ydLineCell.textContent = newYdLine;
+    let currentSide = ydLineCell.classList.contains("player1Text") ? 1 : 2;
+    let currentToGo   = toNum(toGoCell.textContent) || 0;
+    let infoResultToGo = currentToGo - gainOrLoss;
+
+    if (infoResultToGo <= 0) {
+        toGoCell.textContent = "10";
+        downCell.textContent = suffixes[1];
+    } else {
+        let currentDownNumber = parseInt(downCell.textContent, 10);
+        if (isNaN(currentDownNumber)) currentDownNumber = 0;
+        let nextDown = currentDownNumber + 1;
+        if (nextDown > 4) {
+            infoPlay.infoResult += `<br><strong>Turnover on downs!</strong>`;
+            GameState.playType = "Turnover on downs";
+            Stats.players[GameState.currentPlayer].turnovers++;
+            changePossession({ receiver: GameState.opponent, spot: newYdLine, side: currentSide, reason: "turnover on downs" });
+            return { endTurn: true };
+        } else {
+            toGoCell.textContent = infoResultToGo;
+            downCell.textContent = suffixes[nextDown];
+        }
+    }
+    return { newYdLine, side: currentSide, endTurn: false };
+};
+
+const changePossession = ({ receiver, spot = 25, side, reason = "" } = {}) => {
+    if (!receiver) return;
+    if (GameState.lastPossession[2]) GameState.isGameOver = true;
+
+    const previousPlayer = GameState.currentPlayer;
+    const newPlayer      = receiver;
+    const sideClass      = `player${side}Text`;
+
+    ["downN","to_go","ydLine"].forEach(id => {
+        const cell = getCell(id, previousPlayer);
+        if (cell) { cell.textContent = "-"; cell.classList.remove("player1Text","player2Text"); }
+    });
+
+    GameState.currentPlayer = newPlayer;
+    GameState.opponent      = previousPlayer;
+
+    const ydCell   = getCell("ydLine", newPlayer);
+    const downCell = getCell("downN",  newPlayer);
+    const toGoCell = getCell("to_go",  newPlayer);
+
+    if (ydCell)   { ydCell.textContent = spot; ydCell.classList.remove("player1Text","player2Text"); ydCell.classList.add(sideClass); }
+    if (downCell)  downCell.textContent = "1st";
+    if (toGoCell)  toGoCell.textContent = "10";
+
+    const possCell = getCell("possN", newPlayer);
+    if (possCell) possCell.textContent = Math.min(toNum(possCell.textContent) + 1, GameState.maxPossessions);
+
+    if (!GameState.isGameOver) {
+        const currentPoss = toNum(possCell.textContent);
+        if (currentPoss === GameState.maxPossessions && !GameState.lastPossession[newPlayer]) {
+            GameState.lastPossession[newPlayer] = true;
+        }
+    }
+
+    if (!GameState.isGameOver) {
+        infoPlay.infoResult += `<br>Change of possession. Player ${GameState.currentPlayer} turn`;
+        if (GameState.lastPossession[GameState.currentPlayer]) {
+            infoPlay.infoResult += `<br><strong>Last turn for Player ${GameState.currentPlayer}</strong>`;
+        }
+    }
+
+    moveVerticalLine(spot, side, newPlayer);
+    GameState.isPunt = false;
+    updateKickButtons();
+};
+
+const updateProgress = (gainOrLoss) => {
+    let toGoCell   = getCell("to_go");
+    let downCell   = getCell("downN");
+    let ydLineCell = getCell("ydLine");
+    const suffixes = { 1:"1st", 2:"2nd", 3:"3rd", 4:"4th" };
+
+    let currentYdLine = toNum(ydLineCell.textContent) || 0;
+    GameState.ydLine  = currentYdLine;
+    let fieldSide     = ydLineCell.classList.contains("player1Text") ? 1 : 2;
+    infoPlay.infoPosition = `P${fieldSide} ${currentYdLine}`;
+
+    if (!GameState.TOButton) {
+        const playContext = { gainOrLoss, currentYdLine, fieldSide, ydLineCell, toGoCell, downCell, suffixes };
+        let result = GameState.isPunt ? handlePunt(playContext) : handleNormalPlay(playContext);
+        if (result?.endTurn) return;
+        moveVerticalLine(toNum(result.newYdLine), result.side);
+        updateKickButtons();
+    }
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// GAME OVER (original)
+// ═══════════════════════════════════════════════════════════════
+function handleGameOver() {
+    const scoreP1 = document.querySelector('.infoBlock[player="1"] .cell[data-name="score"]').textContent;
+    const scoreP2 = document.querySelector('.infoBlock[player="2"] .cell[data-name="score"]').textContent;
+    const scores = [scoreP1, scoreP2];
+    disableDiceButtons();
+    resetCells();
+    if (ballLabel) ballLabel.textContent = "";
+    return scores;
+}
+
+function showGameoverWindow(scores) {
+    const modal   = document.getElementById('modal-gameover');
+    const content = document.querySelector('.modal-content-gameover');
+    document.getElementById('score-p1').textContent = scores[0];
+    document.getElementById('score-p2').textContent = scores[1];
+    makeDraggable(content);
+    modal.style.display = 'flex';
+    content.style.left  = '50%';
+    content.style.top   = '50%';
+    content.style.transform = 'translate(-50%, -50%)';
+    updateGameOverStats();
+    document.getElementById('btn-exit').onclick = () => { modal.style.display = 'none'; };
+}
+
+function updateGameOverStats() {
+    [1, 2].forEach(player => {
+        const data = Stats.players[player];
+        statsConfig.forEach(stat => {
+            const el = document.getElementById(`p${player}-${stat.key}`);
+            if (el) el.textContent = stat.format(data[stat.key]);
+        });
+    });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// LÓGICA PRINCIPAL DE JUEGO (original, con sincronización añadida)
+// ═══════════════════════════════════════════════════════════════
+async function gameLogic(e) {
+    const numDice = e.currentTarget.getAttribute('dice');
+    const dice    = rollDice(numDice);
+    const dado1   = dice.d1;
+    const dado2   = dice.d2;
+    const dado3   = dice.d3;
+    const colValue = dice.colValue;
+
+    GameState.downPreRoll = getCell("downN").textContent;
+    const actingPlayer    = GameState.currentPlayer;
+    infoPlay.infoPosition = "";
+    infoPlay.infoResult   = "";
+    let cellContent = "";
+    GameState.TOButton = false;
+
+    if (bigTable) {
+        const bigRow = (numDice === "Punt") ? 7 : dado1;
+        const bigCol = colValue;
+        const targetCell = highlightBigTable(bigRow, bigCol);
+
+        // ── Enviar resaltado de tablas al servidor junto con la tirada ──
+        if (socket) {
+            socket.emit('diceRoll', { numDice, d1: dado1, d2: dado2, d3: dado3, colValue,
+                bigTableRow: bigRow, bigTableCol: bigCol, rolledBy: myPlayerNumber });
+        }
+
+        if (targetCell) {
+            cellContent = targetCell.textContent.trim();
+
+            // ── 2/3 dados ──────────────────────────────────────
+            if (numDice === "2" || numDice === "3") {
+                GameState.initialToGo = getCell("to_go").textContent;
+                switch (cellContent) {
+                    case "0":
+                        infoPlay.infoResult = "Incomplete pass.";
+                        updateProgress(0);
+                        break;
+                    case "DH":
+                        infoPlay.infoResult = `Defensive holding. 5-yd gain. 1st down.`;
+                        getCell("downN").textContent = "-";
+                        updateProgress(5);
+                        getCell("to_go").textContent = "10";
+                        break;
+                    case "FM":
+                        infoPlay.infoResult = `Defensive face mask. 15-yd gain. 1st down.`;
+                        getCell("downN").textContent = "-";
+                        updateProgress(15);
+                        getCell("to_go").textContent = "10";
+                        break;
+                    case "TO": {
+                        const timeoutCell = getCell("timeouts");
+                        let timeoutsAvailable = parseInt(timeoutCell.textContent);
+                        let decision = 'turnover';
+                        if (timeoutsAvailable > 0) {
+                            decision = await waitTOdecision(timeoutCell);
+                        }
+                        if (decision === 'timeout') {
+                            GameState.TOButton = true;
+                            GameState.playType = "Timeout";
+                            timeoutCell.textContent = parseInt(timeoutCell.textContent) - 1;
+                            infoPlay.infoResult = `<strong>Timeout</strong>`;
+                            updateProgress(0);
+                        } else {
+                            GameState.TOButton = true;
+                            GameState.playType = "Turnover";
+                            infoPlay.infoResult = `<strong>Turnover</strong>`;
+                            Stats.players[GameState.currentPlayer].turnovers++;
+                            const cellYd = getCell("ydLine");
+                            const spot   = toNum(cellYd.textContent);
+                            changePossession({
+                                receiver: GameState.opponent,
+                                spot,
+                                side: cellYd.classList.contains("player1Text") ? 1 : 2,
+                                reason: "turnover"
+                            });
+                            updateProgress(0);
+                        }
+                        break;
+                    }
+                    case "TD":
+                        Stats.players[GameState.currentPlayer].td++;
+                        handleTD();
+                        break;
+                    case "-5": {
+                        const penalty = Math.random() < 0.5 ? "Delay of game" : "False Start";
+                        infoPlay.infoResult = `${penalty}. 5-yd loss.`;
+                        updateProgress(-5);
+                        break;
+                    }
+                    case "-10":
+                        infoPlay.infoResult = `Offensive holding. 10-yd loss.`;
+                        updateProgress(-10);
+                        break;
+                    case "-15":
+                        infoPlay.infoResult = `Offensive face mask. 15-yd loss.`;
+                        updateProgress(-15);
+                        break;
+                    case "-8":
+                    case "-3": {
+                        const tmp = toNum(cellContent);
+                        infoPlay.infoResult = `Sack. ${Math.abs(tmp)}-yd loss.`;
+                        updateProgress(tmp);
+                        break;
+                    }
+                    default:
+                        if (!isNaN(cellContent) && parseInt(cellContent) > 0) {
+                            let gain = parseInt(cellContent);
+                            infoPlay.infoResult = `${gain}-yd gain.`;
+                            updateProgress(gain);
+                        }
+                        break;
+                }
+            }
+
+            // ── Punt ───────────────────────────────────────────
+            else if (numDice === "Punt") {
+                Stats.players[GameState.currentPlayer].punts++;
+                GameState.isPunt = true;
+                const puntYards = toNum(cellContent) || 0;
+                updateProgress(cellContent);
+            }
+
+            // ── PAT / FG ───────────────────────────────────────
+            else if (numDice === "1") {
+                let isPAT   = getCell("downN").textContent === "PAT";
+                let missed  = false;
+                let yarda   = 0;
+                if (isPAT) {
+                    Stats.players[GameState.currentPlayer].xp.att++;
+                    GameState.playType = "PAT";
+                    highlightSmallTable(dado1, 0);
+                    if (cellContent !== "3") {
+                        infoPlay.infoResult = `<strong>PAT is Good!</strong>`;
+                        handleScore(1);
+                        Stats.players[GameState.currentPlayer].xp.made++;
+                    } else {
+                        infoPlay.infoResult = `<strong>PAT Missed!</strong>`;
+                    }
+                    endzoneRight.style.color = ""; endzoneRight.style.textShadow = "";
+                    endzoneLeft.style.color  = ""; endzoneLeft.style.textShadow  = "";
+                } else {
+                    GameState.playType = "Field goal";
+                    Stats.players[GameState.currentPlayer].fg.att++;
+                    const ydDistance = getCell("ydLine", GameState.currentPlayer).textContent;
+                    highlightSmallTable(dado1, ydDistance > 34 ? 1 : 0);
+                    let yd = getCell("ydLine");
+                    yarda  = toNum(yd.textContent) || 0;
+                    let campo = yd.classList.contains("player1Text") ? 1 : 2;
+                    infoPlay.infoPosition = `P${campo} ${yarda}`;
+                    if (cellContent === "3" || (cellContent === "4" && ydDistance > 34)) {
+                        missed = true;
+                        infoPlay.infoResult = `<strong>Field Goal</strong> of ${ydDistance} yd <strong>Missed!</strong>`;
+                    } else {
+                        infoPlay.infoResult = `<strong>Field Goal</strong> of ${ydDistance} yd is <strong>Good!</strong>`;
+                        Stats.players[GameState.currentPlayer].fg.made++;
+                        handleScore(3);
+                    }
+                }
+                changePossession({
+                    receiver: GameState.opponent,
+                    spot: missed ? yarda : 30,
+                    side: GameState.opponent,
+                    reason: "kickoff"
+                });
+            }
+
+            // ── 2 PT ───────────────────────────────────────────
+            else if (numDice === "0") {
+                highlightSmallTable(dado1, 2);
+                GameState.playType = "2PT";
+                Stats.players[GameState.currentPlayer].pt2.att++;
+                if (cellContent === "3" || cellContent === "4") {
+                    infoPlay.infoResult = `<strong>2 PT attempt</strong> successful!`;
+                    Stats.players[GameState.currentPlayer].pt2.made++;
+                    handleScore(2);
+                } else {
+                    infoPlay.infoResult = `<strong>2 PT attempt</strong> missed!`;
+                }
+                endzoneRight.style.color = ""; endzoneRight.style.textShadow = "";
+                endzoneLeft.style.color  = ""; endzoneLeft.style.textShadow  = "";
+                changePossession({ receiver: GameState.opponent, spot: 30, side: GameState.opponent, reason: "2PT" });
+            }
+        }
+    }
+
+    // Texto del texybox playbyplay
+    const pos = (GameState.ydLine < GameState.initialToGo)
+        ? infoPlay.infoDownYard = `${GameState.downPreRoll} & goal`
+        : infoPlay.infoDownYard = `${GameState.downPreRoll} & ${GameState.initialToGo}`;
+    playText(actingPlayer, GameState.playType);
+
+    // ── Sincronizar estado con el rival ──────────────────────
+    if (socket) {
+        const ydLineCell = getCell("ydLine");
+        const moveYard   = toNum(ydLineCell?.textContent) || 0;
+        const moveField  = ydLineCell?.classList.contains("player1Text") ? 1 : 2;
+        const snap = buildStateSnapshot();
+        snap.ydLineMoveYard   = moveYard;
+        snap.ydLineMoveField  = moveField;
+        snap.ydLineMovePlayer = GameState.currentPlayer;
+        socket.emit('syncState', snap);
+    }
+
+    // Game Over
+    if (GameState.isGameOver) {
+        const scoresValue = handleGameOver();
+        showGameoverWindow(scoresValue);
+        if (socket) socket.emit('gameOver', { scores: scoresValue, stats: Stats.players });
+    }
+}
+
+// Asignar listeners a los botones de dados
+rollButtons.forEach(button => { button.addEventListener('click', gameLogic); });
+
+
+// ═══════════════════════════════════════════════════════════════
+// VENTANA DE INICIO
+// ═══════════════════════════════════════════════════════════════
+function showStartWindow() {
+    const modal   = document.getElementById('modal-start');
+    const content = modal.querySelector('.modal-content');
+    makeDraggable(content);
+    content.style.top  = '50%';
+    content.style.left = '50%';
+    content.style.transform = 'translate(-50%, -50%)';
+    modal.style.display = 'flex';
+
+    // Mostrar controles según si es P1 o P2
+    const btnArea  = document.getElementById('start-buttons-p1');
+    const waitArea = document.getElementById('start-wait-p2');
+
+    if (myPlayerNumber === 1) {
+        btnArea.style.display  = 'flex';
+        waitArea.style.display = 'none';
+    } else {
+        btnArea.style.display  = 'none';
+        waitArea.style.display = 'block';
+    }
+
+    document.getElementById('btn-5turns').onclick = () => {
+        socket.emit('startGame', { maxPossessions: 5 });
+    };
+    document.getElementById('btn-10turns').onclick = () => {
+        socket.emit('startGame', { maxPossessions: 10 });
+    };
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DRAGGABLE (original)
+// ═══════════════════════════════════════════════════════════════
+function makeDraggable(modal) {
+    let dragging = false, offsetX = 0, offsetY = 0, translateX = 0, translateY = 0;
+    const state = { tx: 0, ty: 0 };
+
+    modal.addEventListener("mousedown", (e) => {
+        if (e.target.closest("button, input, select, textarea")) return;
+        e.preventDefault();
+        const rect = modal.getBoundingClientRect();
+        offsetX = e.clientX - rect.left;
+        offsetY = e.clientY - rect.top;
+        translateX = state.tx; translateY = state.ty;
+        dragging = true;
+        modal.classList.add("dragging");
+        document.addEventListener("mousemove", drag);
+        document.addEventListener("mouseup", stopDrag);
+    });
+
+    function drag(e) {
+        if (!dragging) return;
+        e.preventDefault();
+        const rect = modal.getBoundingClientRect();
+        let newLeft = e.clientX - offsetX;
+        let newTop  = e.clientY - offsetY;
+        newLeft = Math.max(0, Math.min(newLeft, window.innerWidth  - modal.offsetWidth));
+        newTop  = Math.max(0, Math.min(newTop,  window.innerHeight - modal.offsetHeight));
+        translateX = state.tx + (newLeft - rect.left);
+        translateY = state.ty + (newTop  - rect.top);
+        requestAnimationFrame(updatePosition);
+    }
+    function updatePosition() {
+        modal.style.transform = `translate(${translateX}px, ${translateY}px)`;
+        state.tx = translateX; state.ty = translateY;
+    }
+    function stopDrag() {
+        dragging = false;
+        modal.classList.remove("dragging");
+        document.removeEventListener("mousemove", drag);
+        document.removeEventListener("mouseup", stopDrag);
+    }
+    modal.center = function () {
+        const rect = modal.getBoundingClientRect();
+        state.tx += (window.innerWidth  - rect.width)  / 2 - rect.left;
+        state.ty += (window.innerHeight - rect.height) / 2 - rect.top;
+        modal.style.transform = `translate(${state.tx}px, ${state.ty}px)`;
+    };
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// INICIALIZACIÓN DEL CAMPO Y UI
+// ═══════════════════════════════════════════════════════════════
+initField();
+resetCells();
+disableDiceButtons();
+
+
+// ═══════════════════════════════════════════════════════════════
+// LÓGICA DE CONEXIÓN CON SOCKET.IO
+// ═══════════════════════════════════════════════════════════════
+(function initSocket() {
+    const connPanel   = document.getElementById('connection-panel');
+    const connStatus  = document.getElementById('conn-status');
+    const joinArea    = document.getElementById('join-area');
+    const waitingMsg  = document.getElementById('waiting-msg');
+    const playerBadge = document.getElementById('player-badge');
+    const turnBanner  = document.getElementById('turn-banner');
+
+    //socket = io();
+    socket = io(window.location.origin); // Así funciona tanto en local como online
+
+    socket.on('connect', () => {
+        connStatus.textContent = '✅ Connected to the server';
+        joinArea.style.display = 'flex';
+    });
+
+    socket.on('connect_error', () => {
+        connStatus.textContent = '❌ Unable to connect to the server';
+    });
+
+    document.getElementById('btn-join-room').onclick = () => {
+        const roomId = document.getElementById('room-input').value.trim() || 'sala1';
+        socket.emit('joinRoom', { roomId });
+        connStatus.textContent = `Joinning the room "${roomId}"…`;
+        document.getElementById('btn-join-room').disabled = true;
+    };
+
+    // Jugador asignado
+    socket.on('assignedPlayer', ({ playerNumber, roomId, waitingForOpponent }) => {
+        myPlayerNumber = playerNumber;
+
+        playerBadge.textContent = `PLAYER ${playerNumber}`;
+        playerBadge.className   = `p${playerNumber}`;
+        playerBadge.style.display = 'inline-block';
+
+        if (waitingForOpponent) {
+            connStatus.textContent  = `Room "${roomId}" — You are Player ${playerNumber}`;
+            waitingMsg.style.display = 'block';
+        } else {
+            // Ya hay 2 jugadores, la sala está llena (no debería llegar aquí normalmente)
+            connStatus.textContent = `Room "${roomId}" — You are Player ${playerNumber}`;
+        }
+
+        // Mostrar banner de turno
+        turnBanner.style.display = 'block';
+    });
+
+    // La sala está llena
+    socket.on('roomFull', () => {
+        connStatus.textContent = '⛔ The room is full. Try another code.';
+        document.getElementById('btn-join-room').disabled = false;
+    });
+
+    // El rival se unió → ambos jugadores listos
+    socket.on('opponentJoined', () => {
+        waitingMsg.style.display = 'none';
+        // Ocultar panel de conexión y mostrar juego
+        connPanel.style.display = 'none';
+
+        // Mostrar ventana de inicio de partida
+        showStartWindow();
+        applyTurnLock();
+    });
+
+    // El servidor confirma el inicio de partida
+    socket.on('gameStarted', ({ maxPossessions }) => {
+        GameState.maxPossessions = maxPossessions;
+        // Cerrar modal de inicio
+        document.getElementById('modal-start').style.display = 'none';
+        startGame();
+        applyTurnLock();
+    });
+
+    // Recibir tirada de dados del jugador activo (para el jugador pasivo)
+    // Usamos data.rolledBy (quién tiró) en vez de GameState.currentPlayer,
+    // porque para cuando llega este evento al cliente activo ya puede haber
+    // cambiado de turno (changePossession lo actualiza antes de que el evento
+    // llegue por el event loop), lo que causaría que el jugador activo
+    // re-aplicara highlightBigTable borrando el resaltado de smallTable.
+    socket.on('diceResult', (data) => {
+        if (data.numDice !== undefined && myPlayerNumber !== data.rolledBy) {
+            applyDiceResult(data.numDice, data.d1, data.d2, data.d3, data.colValue);
+            // Resaltar la bigTable de inmediato, sin esperar al syncState
+            if (data.bigTableRow !== undefined && data.bigTableCol !== undefined) {
+                highlightBigTable(data.bigTableRow, data.bigTableCol);
+            }
+        }
+    });
+
+    // Sincronizar estado completo desde el jugador activo
+    socket.on('stateSync', (snap) => {
+        applyStateSnapshot(snap);
+        applyTurnLock();
+    });
+
+    // Play by play del rival
+    socket.on('playByPlaySync', ({ html }) => {
+        textContainer.innerHTML += html;
+        textContainer.scrollTop = textContainer.scrollHeight;
+    });
+
+    // Decisión TO del rival (si el rival decide, resolvemos la promesa local)
+    socket.on('toDecisionSync', ({ decision }) => {
+        if (pendingTOResolve) {
+            pendingTOResolve(decision);
+            pendingTOResolve = null;
+            document.getElementById('modal-container').style.display = 'none';
+        }
+    });
+
+    // Game Over recibido del rival (para el jugador que no disparó el evento)
+    socket.on('gameOverSync', ({ scores, stats }) => {
+        if (stats) { [1,2].forEach(p => { if (stats[p]) Stats.players[p] = stats[p]; }); }
+        const scoresValue = handleGameOver();
+        showGameoverWindow(scores || scoresValue);
+    });
+
+    // Rival desconectado
+    socket.on('opponentDisconnected', () => {
+        const banner  = document.getElementById('turn-banner');
+        banner.className = 'waiting';
+        banner.textContent = '⚠️ Your opponent disconnected. Please reload to play again.';
+        disableDiceButtons();
+    });
+})();
+
+</script>
+
+</body>
+</html>
